@@ -1,0 +1,94 @@
+import asyncio
+import json
+from pathlib import Path
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    CallbackContext
+)
+
+TOKEN = "Токен_бота"
+FILE_PATH = "путь_к_файлу_с_рекламным_текстом"  # Абсолютный путь для linux
+INTERVAL_SECONDS = 3600  # 1 час
+CHATS_FILE = "файл_для_хранения_чатов_в_которых_есть_бот"
+
+class ChatManager:
+    def __init__(self):
+        self.active_chats = set()
+        self._load_chats()
+    
+    def _load_chats(self):
+        if Path(CHATS_FILE).exists():
+            with open(CHATS_FILE, 'r') as f:
+                self.active_chats = set(json.load(f))
+    
+    def _save_chats(self):
+        with open(CHATS_FILE, 'w') as f:
+            json.dump(list(self.active_chats), f)
+    
+    async def add_chat(self, chat_id):
+        self.active_chats.add(chat_id)
+        self._save_chats()
+
+async def send_updates(context: CallbackContext):
+    try:
+        chat_manager = ChatManager()
+        
+        # Читаем файл
+        with open(FILE_PATH, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Отправляем в каждый чат с задержкой
+        for chat_id in list(chat_manager.active_chats):
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"Обновление:\n\n{content[:4000]}"
+                )
+                await asyncio.sleep(2)  # Важная задержка!
+            except Exception as e:
+                print(f"Ошибка отправки в {chat_id}: {e}")
+                
+    except Exception as e:
+        print(f"Ошибка: {e}")
+
+async def add_chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_manager = ChatManager()
+    await chat_manager.add_chat(update.effective_chat.id)
+    await update.message.reply_text("Чат добавлен в рассылку!")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Бот для рассылки\n"
+        "Используйте /addchat чтобы добавить этот чат"
+    )
+
+def main():
+    # Важная настройка!
+    application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .http_version("1.1")  # Решает проблему с HTTPX
+        .connection_pool_size(5)
+        .pool_timeout(30)
+        .build()
+    )
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("addchat", add_chat_command))
+    
+    # Настройка периодической задачи
+    job_queue = application.job_queue
+    if job_queue:
+        job_queue.run_repeating(
+            send_updates,
+            interval=INTERVAL_SECONDS,
+            first=10
+        )
+    
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
